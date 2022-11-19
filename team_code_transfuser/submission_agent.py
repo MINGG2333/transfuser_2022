@@ -260,7 +260,7 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
         result['far_command'] = next_cmd
 
         result['R_pos_from_head'] = R
-        result['offset_pos'] = np.array([pos[0], pos[1]])
+        result['offset_pos'] = np.array([denoised_pos[0], denoised_pos[1]]) # jxy: according to .run_step()
         # from team_code/map_agent.py:
         self._actors = self._world.get_actors()
         self._traffic_lights = get_nearby_lights(self._vehicle, self._actors.filter('*traffic_light*'))
@@ -287,7 +287,7 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
         # repeat actions twice to ensure LiDAR data availability
         if self.step % self.config.action_repeat == 1:
             self.update_gps_buffer(self.control, tick_data['compass'], tick_data['speed'])
-            self.record_step(tick_data, control) # jxy: add
+            self.record_step(tick_data, self.control) # jxy: add
             return self.control
 
         # prepare image input
@@ -440,9 +440,9 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
     # jxy: add record_step
     def record_step(self, tick_data, control, pred_waypoint=[]):
         # draw pred_waypoint
-        if len(pred_waypoint):
-            pred_waypoint[:,1] *= -1
-            pred_waypoint = tick_data['R_pos_from_head'].dot(pred_waypoint.T).T
+        # if len(pred_waypoint):
+        #     pred_waypoint[:,1] *= -1
+        #     pred_waypoint = tick_data['R_pos_from_head'].dot(pred_waypoint.T).T
         self._route_planner.run_step2(pred_waypoint, is_gps=False, store=False) # metadata['wp_1'] relative to ego head (as y)
         # addition: from leaderboard/team_code/auto_pilot.py
         speed = tick_data['speed']
@@ -659,8 +659,8 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
         cropped_image = np.transpose(cropped_image, (2,0,1))
         return cropped_image
 
-    def destroy(self):
-        del self.nets
+    # def destroy(self):
+    #     del self.nets
 
 # Taken from LBC
 class RoutePlanner_2022(RoutePlanner):
