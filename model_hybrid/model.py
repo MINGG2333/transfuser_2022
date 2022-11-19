@@ -671,9 +671,9 @@ class LidarCenterNet(nn.Module):
         aim = (waypoints[1] + waypoints[0]) / 2.0
         angle = np.degrees(np.arctan2(aim[1], aim[0])) / 90.0
         if (speed < 0.01):
-            angle = 0.0  # When we don't move we don't want the angle error to accumulate in the integral
+            angle = np.array(0.0)  # When we don't move we don't want the angle error to accumulate in the integral
         if brake:
-            angle = 0.0
+            angle = np.array(0.0)
         
         steer = self.turn_controller.step(angle)
 
