@@ -536,7 +536,7 @@ def crop_image(image, crop=(128, 640), crop_shift=0):
     # only shift for x direction
     start_x += int(crop_shift)
 
-    image = np.asarray(image)
+    image = np.asarray(image).copy()
     cropped_image = image[start_y:start_y+crop_h, start_x:start_x+crop_w]
     cropped_image = np.transpose(cropped_image, (2,0,1))
     return cropped_image

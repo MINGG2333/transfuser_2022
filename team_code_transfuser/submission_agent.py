@@ -1,6 +1,7 @@
 import os
 import json
 from copy import deepcopy
+import time
 
 import cv2
 import carla
@@ -27,6 +28,14 @@ if not SAVE_PATH:
 else:
     pathlib.Path(SAVE_PATH).mkdir(parents=True, exist_ok=True)
 
+# jxy: addition; (add display.py and fix RoutePlanner.py)
+from team_code.planner import RoutePlanner
+from team_code.display import HAS_DISPLAY, Saver, debug_display
+# addition from team_code/map_agent.py
+from carla_project.src.common import CONVERTER, COLOR
+from carla_project.src.carla_env import draw_traffic_lights, get_nearby_lights
+
+
 def get_entry_point():
     return 'HybridAgent'
 
@@ -37,6 +46,12 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
         self.config_path = path_to_conf_file
         self.step = -1
         self.initialized = False
+
+        self.wall_start = time.time()
+        return AgentSaver
+
+        # jxy: add return AgentSaver and init_ads (setup keep 5 lines); rm save_path;
+    def init_ads(self, path_to_conf_file):
 
         args_file = open(os.path.join(path_to_conf_file, 'args.txt'), 'r')
         self.args = json.load(args_file)
@@ -110,9 +125,11 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
 
 
     def _init(self):
-        self._route_planner = RoutePlanner(self.config.route_planner_min_distance, self.config.route_planner_max_distance)
+        self._route_planner = RoutePlanner_2022(self.config.route_planner_min_distance, self.config.route_planner_max_distance)
         self._route_planner.set_route(self._global_plan, True)
         self.initialized = True
+
+        super()._init() # jxy add
 
     def _get_position(self, tick_data):
         gps = tick_data['gps']
@@ -160,7 +177,15 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
                         'type': 'sensor.speedometer',
                         'reading_frequency': self.config.carla_fps,
                         'id': 'speed'
-                        }
+                        },
+                    # jxy: addition from team_code/map_agent.py
+                    {
+                        'type': 'sensor.camera.semantic_segmentation',
+                        'x': 0.0, 'y': 0.0, 'z': 100.0,
+                        'roll': 0.0, 'pitch': -90.0, 'yaw': 0.0,
+                        'width': 512, 'height': 512, 'fov': 5 * 10.0,
+                        'id': 'map'
+                        },
                     ]
         if(SAVE_PATH != None): #Debug camera for visualizations
             sensors.append({
@@ -231,6 +256,17 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
         local_command_point = R.T.dot(local_command_point)
         result['target_point'] = tuple(local_command_point)
 
+        # jxy addition:
+        result['far_command'] = next_cmd
+
+        result['R_pos_from_head'] = R
+        result['offset_pos'] = np.array([pos[0], pos[1]])
+        # from team_code/map_agent.py:
+        self._actors = self._world.get_actors()
+        self._traffic_lights = get_nearby_lights(self._vehicle, self._actors.filter('*traffic_light*'))
+        topdown = input_data['map'][1][:, :, 2]
+        topdown = draw_traffic_lights(topdown, self._vehicle, self._traffic_lights)
+        result['topdown'] = COLOR[CONVERTER[topdown]]
         return result
 
     @torch.inference_mode() # Faster version of torch_no_grad
@@ -251,6 +287,7 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
         # repeat actions twice to ensure LiDAR data availability
         if self.step % self.config.action_repeat == 1:
             self.update_gps_buffer(self.control, tick_data['compass'], tick_data['speed'])
+            self.record_step(tick_data, control) # jxy: add
             return self.control
 
         # prepare image input
@@ -359,8 +396,10 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
             safety_box      = safety_box[safety_box[..., 0] > self.config.safety_box_x_min]
             safety_box      = safety_box[safety_box[..., 0] < self.config.safety_box_x_max]
 
-        steer, throttle, brake = self.nets[0].control_pid(self.pred_wp, gt_velocity, is_stuck)
-        
+        # jxy: points_world
+        steer, throttle, brake, metadata, points_world = self.nets[0].control_pid(self.pred_wp, gt_velocity, is_stuck)
+        self.pid_metadata = metadata
+
         if is_stuck and self.forced_move==1: # no steer for initial frame when unblocking
             steer = 0.0
 
@@ -391,7 +430,30 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
         self.control = control
 
         self.update_gps_buffer(self.control, tick_data['compass'], tick_data['speed'])
+
+        if HAS_DISPLAY: # jxy: change
+            debug_display(tick_data, control.steer, control.throttle, control.brake, self.step)
+
+        self.record_step(tick_data, control, points_world) # jxy: add
         return control
+
+    # jxy: add record_step
+    def record_step(self, tick_data, control, pred_waypoint=[]):
+        # draw pred_waypoint
+        if len(pred_waypoint):
+            pred_waypoint[:,1] *= -1
+            pred_waypoint = tick_data['R_pos_from_head'].dot(pred_waypoint.T).T
+        self._route_planner.run_step2(pred_waypoint, is_gps=False, store=False) # metadata['wp_1'] relative to ego head (as y)
+        # addition: from leaderboard/team_code/auto_pilot.py
+        speed = tick_data['speed']
+        self._recorder_tick(control) # trjs
+        ego_bbox = self.gather_info() # metrics
+        self._route_planner.run_step2(ego_bbox + tick_data['offset_pos'], is_gps=True, store=False)
+        self._route_planner.show_route()
+
+        if self.save_path is not None and self.step % self.record_every_n_step == 0:
+            self.save(control.steer, control.throttle, control.brake, tick_data)
+
 
     def bb_detected_in_front_of_vehicle(self, ego_speed):
         if (len(self.bb_buffer) < 1):  # We only start after we have 4 time steps.
@@ -579,7 +641,7 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
         if crop_y is None:
             crop_y = height
             
-        image = np.asarray(image)
+        image = np.asarray(image).copy()
         cropped_image = image[start_y:start_y+crop_y, start_x:start_x+crop_x]
         return cropped_image
 
@@ -601,32 +663,19 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
         del self.nets
 
 # Taken from LBC
-class RoutePlanner(object):
+class RoutePlanner_2022(RoutePlanner):
     def __init__(self, min_distance, max_distance):
+        super().__init__(min_distance, max_distance)
         self.saved_route = deque()
-        self.route = deque()
-        self.min_distance = min_distance
-        self.max_distance = max_distance
         self.is_last = False
 
-        self.mean = np.array([0.0, 0.0]) # for carla 9.10
-        self.scale = np.array([111324.60662786, 111319.490945]) # for carla 9.10
-
-    def set_route(self, global_plan, gps=False):
-        self.route.clear()
-
-        for pos, cmd in global_plan:
-            if gps:
-                pos = np.array([pos['lat'], pos['lon']])
-                pos -= self.mean
-                pos *= self.scale
-            else:
-                pos = np.array([pos.location.x, pos.location.y])
-                pos -= self.mean
-
-            self.route.append((pos, cmd))
-
     def run_step(self, gps):
+        self.debug.clear()
+
+        self.cur_veh_gps = gps
+        if self.centre is None:
+            self.centre = gps
+
         if len(self.route) <= 2:
             self.is_last = True
             return self.route
@@ -646,10 +695,21 @@ class RoutePlanner(object):
                 farthest_in_range = distance
                 to_pop = i
 
+            r = 255 * int(distance > self.min_distance)
+            g = 255 * int(self.route[i][1].value == 4)
+            b = 255
+            self.debug.dot(self.centre, self.route[i][0], (r, g, b))
+
         for _ in range(to_pop):
             if len(self.route) > 2:
                 self.route.popleft()
 
+        self.debug.dot(self.centre, self.route[0][0], (0, 255, 0))
+        self.debug.dot(self.centre, self.route[1][0], (255, 0, 0))
+
+        self.store_wps_real.append(gps)
+        for pos in self.store_wps_real:
+            self.debug.dot(self.centre, pos, (0, 0, 255))
         return self.route
 
     def save(self):
@@ -699,3 +759,115 @@ class EgoModel():
         next_spds = np.array(next_spds)
 
         return next_locs, next_yaws, next_spds
+
+
+# jxy: mv save in AgentSaver & rm destroy
+class AgentSaver(Saver):
+    def __init__(self, path_to_conf_file, dict_, list_):
+        self.config_path = path_to_conf_file
+
+        # jxy: according to sensor
+        self.rgb_list = ['rgb', 'topdown', ] # 'bev', 
+        self.add_img = [] # 'flow', 'out', 
+        self.lidar_list = [] # 'lidar_0', 'lidar_1',
+        self.dir_names = self.rgb_list + self.add_img + self.lidar_list + ['pid_metadata']
+
+        super().__init__(dict_, list_)
+
+    def run(self): # jxy: according to init_ads
+
+        path_to_conf_file = self.config_path
+        args_file = open(os.path.join(path_to_conf_file, 'args.txt'), 'r')
+        self.args = json.load(args_file)
+        args_file.close()
+
+        # setting machine to avoid loading files
+        self.config = GlobalConfig(setting='eval')
+
+        if ('sync_batch_norm' in self.args):
+            self.config.sync_batch_norm = bool(self.args['sync_batch_norm'])
+        if ('use_point_pillars' in self.args):
+            self.config.use_point_pillars = self.args['use_point_pillars']
+        if ('n_layer' in self.args):
+            self.config.n_layer = self.args['n_layer']
+        if ('use_target_point_image' in self.args):
+            self.config.use_target_point_image = bool(self.args['use_target_point_image'])
+        if ('use_velocity' in self.args):
+            use_velocity = bool(self.args['use_velocity'])
+        else:
+            use_velocity = True
+
+        if ('image_architecture' in self.args):
+            image_architecture = self.args['image_architecture']
+        else:
+            image_architecture = 'resnet34'
+
+        if ('lidar_architecture' in self.args):
+            lidar_architecture = self.args['lidar_architecture']
+        else:
+            lidar_architecture = 'resnet18'
+
+        if ('backbone' in self.args):
+            self.backbone = self.args['backbone']  # Options 'geometric_fusion', 'transFuser', 'late_fusion', 'latentTF'
+        else:
+            self.backbone = 'transFuser'  # Options 'geometric_fusion', 'transFuser', 'late_fusion', 'latentTF'
+
+        super().run()
+
+    def _save(self, tick_data):    
+        # addition
+        # save_action_based_measurements = tick_data['save_action_based_measurements']
+        self.save_path = tick_data['save_path']
+        if not (self.save_path / 'ADS_log.csv' ).exists():
+            # addition: generate dir for every total_i
+            self.save_path.mkdir(parents=True, exist_ok=True)
+            for dir_name in self.dir_names:
+                (self.save_path / dir_name).mkdir(parents=True, exist_ok=False)
+
+            # according to self.save data_row_list
+            title_row = ','.join(
+                ['frame_id', 'far_command', 'speed', 'steering', 'throttle', 'brake',] + \
+                self.dir_names
+            )
+            with (self.save_path / 'ADS_log.csv' ).open("a") as f_out:
+                f_out.write(title_row+'\n')
+
+        self.step = tick_data['frame']
+        self.save(tick_data['steer'],tick_data['throttle'],tick_data['brake'], tick_data)
+
+    # addition: modified from leaderboard/team_code/auto_pilot.py
+    def save(self, steer, throttle, brake, tick_data):
+        # frame = self.step // 10
+        frame = self.step
+
+        # 'gps' 'thetas'
+        pos = tick_data['gps']
+        speed = tick_data['speed']
+        far_command = tick_data['far_command']
+        data_row_list = [frame, far_command.name, speed, steer, throttle, brake,]
+
+        if frame >= self.config.action_repeat: # jxy: according to run_step
+            # images
+            for rgb_name in self.rgb_list + self.add_img:
+                path_ = self.save_path / rgb_name / ('%04d.png' % frame)
+                Image.fromarray(tick_data[rgb_name]).save(path_)
+                data_row_list.append(str(path_))
+            # lidar
+            for i, rgb_name in enumerate(self.lidar_list):
+                path_ = self.save_path / rgb_name / ('%04d.png' % frame)
+                Image.fromarray(cm.gist_earth(tick_data['lidar_processed'][0][0, i], bytes=True)).save(path_)
+                data_row_list.append(str(path_))
+
+            # pid_metadata
+            pid_metadata = tick_data['pid_metadata']
+            path_ = self.save_path / 'pid_metadata' / ('%04d.json' % frame)
+            outfile = open(path_, 'w')
+            json.dump(pid_metadata, outfile, indent=4)
+            outfile.close()
+            data_row_list.append(str(path_))
+
+        # collection
+        data_row = ','.join([str(i) for i in data_row_list])
+        with (self.save_path / 'ADS_log.csv' ).open("a") as f_out:
+            f_out.write(data_row+'\n')
+

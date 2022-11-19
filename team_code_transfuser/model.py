@@ -679,7 +679,20 @@ class LidarCenterNet(nn.Module):
 
         steer = np.clip(steer, -1.0, 1.0) #Valid steering values are in [-1,1]
 
-        return steer, throttle, brake
+        metadata = {
+            'speed': float(speed.astype(np.float64)),
+            'steer': float(steer),
+            'throttle': float(throttle),
+            'brake': float(brake),
+            'wp_2': tuple(waypoints[1].astype(np.float64)),
+            'wp_1': tuple(waypoints[0].astype(np.float64)),
+            'desired_speed': float(desired_speed.astype(np.float64)),
+            'angle': float(angle.astype(np.float64)),
+            'aim': tuple(aim.astype(np.float64)),
+            'delta': float(delta.astype(np.float64)),
+        }
+
+        return steer, throttle, brake, metadata, waypoints
     
     def forward_ego(self, rgb, lidar_bev, target_point, target_point_image, ego_vel, bev_points=None, cam_points=None, save_path=None, expert_waypoints=None,
                     stuck_detector=0, forced_move=False, num_points=None, rgb_back=None, debug=False):
