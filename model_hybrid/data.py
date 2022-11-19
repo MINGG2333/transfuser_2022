@@ -11,7 +11,7 @@ import random
 from copy import deepcopy
 import io
 
-from utils import get_vehicle_to_virtual_lidar_transform, get_vehicle_to_lidar_transform, get_lidar_to_vehicle_transform, get_lidar_to_bevimage_transform
+from model_hybrid.utils import get_vehicle_to_virtual_lidar_transform, get_vehicle_to_lidar_transform, get_lidar_to_vehicle_transform, get_lidar_to_bevimage_transform
 
 class CARLA_Data(Dataset):
 

@@ -2,7 +2,7 @@ from collections import deque
 import torch.nn.functional as F
 import cv2
 
-from utils import *
+from model_hybrid.utils import *
 from transfuser import TransfuserBackbone, SegDecoder, DepthDecoder
 from geometric_fusion import GeometricFusionBackbone
 from late_fusion import LateFusionBackbone

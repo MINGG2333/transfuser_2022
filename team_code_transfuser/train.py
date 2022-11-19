@@ -10,9 +10,9 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from config import GlobalConfig
-from model import LidarCenterNet
-from data import CARLA_Data, lidar_bev_cam_correspondences
+from model_hybrid.config import GlobalConfig
+from model_hybrid.model import LidarCenterNet
+from model_hybrid.data import CARLA_Data, lidar_bev_cam_correspondences
 
 import pathlib
 import datetime

@@ -13,9 +13,9 @@ import numpy as np
 import math
 
 from leaderboard.autoagents import autonomous_agent
-from model import LidarCenterNet
-from config import GlobalConfig
-from data import lidar_to_histogram_features, draw_target_point, lidar_bev_cam_correspondences
+from model_hybrid.model import LidarCenterNet
+from model_hybrid.config import GlobalConfig
+from model_hybrid.data import lidar_to_histogram_features, draw_target_point, lidar_bev_cam_correspondences
 
 from shapely.geometry import Polygon
 
