@@ -659,8 +659,10 @@ class HybridAgent(autonomous_agent.AutonomousAgent):
         cropped_image = np.transpose(cropped_image, (2,0,1))
         return cropped_image
 
-    # def destroy(self):
-    #     del self.nets
+    def destroy(self): # jxy mv before _init
+        del self.nets
+        torch.cuda.empty_cache()
+        super().destroy()
 
 # Taken from LBC
 class RoutePlanner_2022(RoutePlanner):
